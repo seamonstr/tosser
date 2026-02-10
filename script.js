@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 
+const PARTICLE_COUNT = 170;
+
 // Three.js scene setup
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xf4f4f9);
@@ -105,10 +107,10 @@ scene.add(wokGroup);
 // Particle system
 const particles = [];
 const particleTypes = [
-    { name: 'ginger', color: 0xf2d7d5 },
-    { name: 'garlic', color: 0xf7e1c1 },
-    { name: 'rice', color: 0xfce4d6 },
-    { name: 'beans', color: 0xd4a574 },
+    { name: 'ginger', color: 0xf2d7d5, size: 0.225 },
+    { name: 'garlic', color: 0xf7e1c1, size: 0.225 },
+    { name: 'rice', color: 0xfce4d6, size: 0.18 },
+    { name: 'beans', color: 0xd4a574, size: 0.25 },
 ];
 
 // Physics constants
@@ -135,14 +137,14 @@ function createParticles() {
 
     const bowlBottom = -wokRadius * Math.sin(wokDepth * Math.PI);
 
-    for (let i = 0; i < 400; i++) {
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
         const type = particleTypes[Math.floor(Math.random() * particleTypes.length)];
 
         // Random position within wok
         const angle = Math.random() * Math.PI * 2;
         const distance = Math.random() * 4.0;
 
-        const geometry = new THREE.BoxGeometry(0.08, 0.08, 0.08);
+        const geometry = new THREE.BoxGeometry(type.size, type.size, type.size);
         const material = new THREE.MeshStandardMaterial({ color: type.color });
         const mesh = new THREE.Mesh(geometry, material);
 
@@ -221,7 +223,7 @@ function updateParticles() {
         p.mesh.rotation.x += p.rotationSpeed.x;
         p.mesh.rotation.y += p.rotationSpeed.y;
         p.mesh.rotation.z += p.rotationSpeed.z;
-        
+
         // Dampen rotation when particles are at rest
         const velocityMagnitude = Math.sqrt(p.vx * p.vx + p.vy * p.vy + p.vz * p.vz);
         if (velocityMagnitude < 0.01) {
