@@ -1,6 +1,7 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-const PARTICLE_COUNT = 170;
+const PARTICLE_COUNT = 200;
 
 // Three.js scene setup
 const scene = new THREE.Scene();
@@ -128,51 +129,6 @@ let wokTiltTarget = 0;
 let wokTiltCurrent = 0;
 let wokYTarget = 0;
 let wokYCurrent = 0;
-
-// Create particles
-function createParticles() {
-    particles.forEach(p => scene.remove(p.mesh));
-    particles.length = 0;
-    isFormingNumber = false;
-
-    const bowlBottom = -wokRadius * Math.sin(wokDepth * Math.PI);
-
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-        const type = particleTypes[Math.floor(Math.random() * particleTypes.length)];
-
-        // Random position within wok
-        const angle = Math.random() * Math.PI * 2;
-        const distance = Math.random() * 4.0;
-
-        const geometry = new THREE.BoxGeometry(type.size, type.size, type.size);
-        const material = new THREE.MeshStandardMaterial({ color: type.color });
-        const mesh = new THREE.Mesh(geometry, material);
-
-        mesh.position.x = Math.cos(angle) * distance;
-        mesh.position.z = Math.sin(angle) * distance;
-        mesh.position.y = bowlBottom + 0.2; // Rest on the bottom of the bowl
-        mesh.castShadow = true;
-
-        scene.add(mesh);
-
-        particles.push({
-            mesh: mesh,
-            vx: 0,
-            vy: 0,
-            vz: 0,
-            rotationSpeed: new THREE.Vector3(
-                (Math.random() - 0.5) * 0.1,
-                (Math.random() - 0.5) * 0.1,
-                (Math.random() - 0.5) * 0.1
-            ),
-            targetX: null,
-            targetY: null,
-            targetZ: null,
-        });
-    }
-}
-
-createParticles();
 
 // Update particle physics
 function updateParticles() {
@@ -424,4 +380,103 @@ function animate() {
     renderer.render(scene, camera);
 }
 
-animate();
+let foodMesh = null; // Store the actual Mesh, not the whole Scene
+
+// 1. Global variables to store the orange data
+let orangeGeometry = null;
+let orangeMaterial = null;
+
+// 2. Define createParticles first
+function createParticles() {
+    // Safety: don't do anything if the geometry hasn't been extracted yet
+    if (!orangeGeometry) return;
+
+    // Clear existing particles from scene if any
+    particles.forEach(p => scene.remove(p.mesh));
+    particles.length = 0;
+    isFormingNumber = false;
+
+    const bowlBottom = -wokRadius * Math.sin(wokDepth * Math.PI);
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        // Create a fresh mesh using the cleaned-up geometry and material
+        const mesh = new THREE.Mesh(orangeGeometry, orangeMaterial);
+
+        // Random position within wok
+        const angle = Math.random() * Math.PI * 2;
+        const distance = Math.random() * 3.8; // Distributed within the wok radius
+
+        mesh.position.x = Math.cos(angle) * distance;
+        mesh.position.z = Math.sin(angle) * distance;
+        mesh.position.y = bowlBottom + 0.3; // Sit slightly above the bottom
+        
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+
+        scene.add(mesh);
+
+        particles.push({
+            mesh: mesh,
+            vx: 0,
+            vy: 0,
+            vz: 0,
+            rotationSpeed: new THREE.Vector3(
+                (Math.random() - 0.5) * 0.1,
+                (Math.random() - 0.5) * 0.1,
+                (Math.random() - 0.5) * 0.1
+            ),
+            targetX: null,
+            targetY: null,
+            targetZ: null,
+        });
+    }
+}
+
+// 3. Define the Loader
+const loader = new GLTFLoader();
+
+loader.load('Orange.glb', (gltf) => {
+    console.log("GLB Loaded, extracting geometry...");
+
+    gltf.scene.traverse((child) => {
+        if (child.isMesh) {
+            // OPTIONAL: Skip meshes that are likely backgrounds/rooms
+            // If the mesh is huge compared to an orange, ignore it
+            child.geometry.computeBoundingBox();
+            const sizeTest = new THREE.Vector3();
+            child.geometry.boundingBox.getSize(sizeTest);
+            if (sizeTest.x > 50) return; // Skip if it's 50+ units wide
+
+            // Take the geometry and material from the first valid mesh found
+            if (!orangeGeometry) {
+                orangeGeometry = child.geometry.clone();
+                orangeMaterial = child.material.clone();
+                console.log("Extracted Mesh Name:", child.name);
+            }
+        }
+    });
+
+    if (orangeGeometry) {
+        // --- NORMALIZE GEOMETRY ---
+        // This fixes the "Giant Background" and "Offset" issues permanently
+        orangeGeometry.computeBoundingBox();
+        orangeGeometry.center(); // Move pivot point to center of orange
+        
+        const size = new THREE.Vector3();
+        orangeGeometry.boundingBox.getSize(size);
+        const maxDim = Math.max(size.x, size.y, size.z);
+        
+        // Scale the geometry itself to about 0.3 units
+        const targetSize = 0.3;
+        const scaleFactor = targetSize / maxDim;
+        orangeGeometry.scale(scaleFactor, scaleFactor, scaleFactor);
+
+        // --- START THE SCENE ---
+        createParticles();
+        animate(); // Start the loop only after model is ready
+    } else {
+        console.error("No valid mesh found in GLB!");
+    }
+}, 
+(xhr) => { console.log((xhr.loaded / xhr.total * 100) + '% loaded'); },
+(error) => { console.error("An error happened while loading GLB:", error); });
