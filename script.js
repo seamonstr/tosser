@@ -1,482 +1,261 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-const PARTICLE_COUNT = 200;
+// --- CONFIG ---
+const PARTICLE_COUNT = 400; 
+const GRAVITY = -0.015;
+const AIR_RESISTANCE = 0.985; 
+const WOK_RADIUS = 4.5;
+const WOK_DEPTH = 0.15; 
 
-// Three.js scene setup
+// --- SCENE SETUP ---
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xf4f4f9);
-
-// Camera - positioned at an angle to see the wok
-const camera = new THREE.PerspectiveCamera(
-    50,
-    window.innerWidth / window.innerHeight,
-    0.1,
-    1000
-);
-camera.position.set(0, 10, 10);
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 10, 11);
 camera.lookAt(0, 0, 0);
 
-// Renderer
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.getElementById('canvas-container').appendChild(renderer.domElement);
 
-// Lighting
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
-scene.add(ambientLight);
+// --- LIGHTING ---
+scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+const mainLight = new THREE.DirectionalLight(0xffffff, 0.5);
+mainLight.position.set(2, 10, 5);
+mainLight.castShadow = true;
+mainLight.shadow.mapSize.set(2048, 2048);
+scene.add(mainLight);
 
-const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-directionalLight.position.set(5, 10, 5);
-directionalLight.castShadow = true;
-directionalLight.shadow.mapSize.width = 2048;
-directionalLight.shadow.mapSize.height = 2048;
-scene.add(directionalLight);
-
-// Add a fill light from below to illuminate the wok interior
 const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
-fillLight.position.set(0, -5, 2);
+fillLight.position.set(-5, 5, -2);
 scene.add(fillLight);
 
-// Get input elements
+const wokPointLight = new THREE.PointLight(0xffffff, 8, 15);
+wokPointLight.position.set(0, 4, 0);
+scene.add(wokPointLight);
+
+// --- WOK GEOMETRY ---
+const wokGroup = new THREE.Group();
+const bowlBottom = -WOK_RADIUS * Math.sin(WOK_DEPTH * Math.PI);
+const baseRadius = WOK_RADIUS * Math.cos(WOK_DEPTH * Math.PI);
+
+// USER PREFERRED MATERIAL
+const wokMat = new THREE.MeshStandardMaterial({ 
+    color: 0x888888,   
+    metalness: 0.9,    
+    roughness: 0.7,    
+    side: THREE.DoubleSide 
+});
+
+const wokBowl = new THREE.Mesh(new THREE.SphereGeometry(WOK_RADIUS, 32, 32, 0, Math.PI * 2, Math.PI / 2, WOK_DEPTH * Math.PI), wokMat);
+wokBowl.receiveShadow = true;
+wokGroup.add(wokBowl);
+
+const wokBase = new THREE.Mesh(new THREE.CircleGeometry(baseRadius, 32), wokMat);
+wokBase.rotation.x = -Math.PI / 2;
+wokBase.position.y = bowlBottom;
+wokBase.receiveShadow = true;
+wokGroup.add(wokBase);
+
+const rimGeo = new THREE.TorusGeometry(WOK_RADIUS, 0.05, 12, 100);
+const rimMat = new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.8 });
+const rim = new THREE.Mesh(rimGeo, rimMat);
+rim.rotation.x = Math.PI / 2;
+wokGroup.add(rim);
+
+scene.add(wokGroup);
+
+// --- STATE ---
+const particles = [];
+let isTossing = false;
+let isFinalToss = false;
+let tossCount = 0;
+let targetTosses = 3;
+
+// Animation State
+let wokAnim = { 
+    tiltTarget: 0, 
+    yTarget: 0, 
+    lerpSpeed: 0.15 
+};
+
 const minInput = document.getElementById('minNumber');
 const maxInput = document.getElementById('maxNumber');
 
-// Create the wok (bowl shape) - oriented correctly from the start
-const wokGroup = new THREE.Group();
-
-// Create a shallow bowl by using the top portion of a sphere
-// phiStart = PI/2 - angle makes it start from horizontal
-// phiLength determines depth
-const wokRadius = 4.5;
-const wokDepth = 0.15; // How much of the sphere to use (0.25 * PI radians)
-
-const wokGeometry = new THREE.SphereGeometry(
-    wokRadius,
-    32, 32,
-    0, Math.PI * 2,  // Full circle horizontally
-    Math.PI / 2,  // Start from horizontal (equator)
-    wokDepth * Math.PI  // Go downward to create bowl
-);
-
-const wokMaterial = new THREE.MeshStandardMaterial({
-    color: 0x555555,
-    metalness: 0.6,
-    roughness: 0.5,
-    side: THREE.DoubleSide,
-});
-const wok = new THREE.Mesh(wokGeometry, wokMaterial);
-wok.receiveShadow = true;
-wokGroup.add(wok);
-
-// Add a circular base to close the bottom of the wok
-const baseRadius = wokRadius * Math.cos(wokDepth * Math.PI);
-const baseY = -wokRadius * Math.sin(wokDepth * Math.PI);
-const baseGeometry = new THREE.CircleGeometry(baseRadius, 32);
-const baseMaterial = new THREE.MeshStandardMaterial({
-    color: 0x444444,
-    metalness: 0.7,
-    roughness: 0.4,
-    side: THREE.DoubleSide,
-});
-const base = new THREE.Mesh(baseGeometry, baseMaterial);
-base.rotation.x = -Math.PI / 2; // Face upward
-base.position.y = baseY;
-base.receiveShadow = true;
-wokGroup.add(base);
-
-// The rim is at y = 0 (the horizontal plane)
-const rimGeometry = new THREE.TorusGeometry(wokRadius, 0.15, 16, 50);
-const rimMaterial = new THREE.MeshStandardMaterial({
-    color: 0x666666,
-    metalness: 0.6,
-    roughness: 0.6,
-});
-const rim = new THREE.Mesh(rimGeometry, rimMaterial);
-rim.rotation.x = Math.PI / 2;
-rim.position.y = 0;
-wokGroup.add(rim);
-
-// The bottom of the bowl is at approximately y = -wokRadius * sin(wokDepth * PI)
-const bowlBottom = -wokRadius * Math.sin(wokDepth * Math.PI);
-
-wokGroup.position.y = 0;
-scene.add(wokGroup);
-
-// Particle system
-const particles = [];
-const particleTypes = [
-    { name: 'ginger', color: 0xf2d7d5, size: 0.225 },
-    { name: 'garlic', color: 0xf7e1c1, size: 0.225 },
-    { name: 'rice', color: 0xfce4d6, size: 0.18 },
-    { name: 'beans', color: 0xd4a574, size: 0.25 },
-];
-
-// Physics constants
-const gravity = -0.015;
-const dampening = 0.98;
-
-// Toss tracking
-let tossCount = 0;
-let generateOnToss = Math.random() < 0.5 ? 3 : 4;
-let isFormingNumber = false;
-let isTossing = false;
-
-// Wok animation properties
-let wokTiltTarget = 0;
-let wokTiltCurrent = 0;
-let wokYTarget = 0;
-let wokYCurrent = 0;
-
-// Update particle physics
-function updateParticles() {
-    // Animate wok tilt and position
-    wokTiltCurrent += (wokTiltTarget - wokTiltCurrent) * 0.15;
-    wokYCurrent += (wokYTarget - wokYCurrent) * 0.15;
-    wokGroup.rotation.x = wokTiltCurrent;
-    wokGroup.position.y = wokYCurrent;
+// --- PHYSICS ENGINE ---
+function updatePhysics() {
+    // Variable easing for the wok gesture
+    wokGroup.rotation.x += (wokAnim.tiltTarget - wokGroup.rotation.x) * wokAnim.lerpSpeed;
+    wokGroup.position.y += (wokAnim.yTarget - wokGroup.position.y) * wokAnim.lerpSpeed;
 
     particles.forEach(p => {
-        // If forming a number, move towards target
-        if (isFormingNumber && p.targetX !== null) {
-            const dx = p.targetX - p.mesh.position.x;
-            const dy = p.targetY - p.mesh.position.y;
-            const dz = p.targetZ - p.mesh.position.z;
-            const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-            if (distance > 0.05) {
-                // Apply controlled attraction force
-                const strength = 0.008;
-                p.vx += dx * strength;
-                p.vy += dy * strength;
-                p.vz += dz * strength;
-
-                // Still apply gravity for natural fall
-                p.vy += gravity * 0.5;
-
-                // Apply stronger dampening as we get closer to target
-                const damping = distance > 0.5 ? 0.92 : 0.8;
-                p.vx *= damping;
-                p.vy *= damping;
-                p.vz *= damping;
-            } else {
-                p.mesh.position.set(p.targetX, p.targetY, p.targetZ);
-                p.vx = p.vy = p.vz = 0;
-            }
-        } else {
-            // Apply gravity
-            p.vy += gravity;
-        }
-
-        // Update position
+        p.vy += GRAVITY;
         p.mesh.position.x += p.vx;
         p.mesh.position.y += p.vy;
         p.mesh.position.z += p.vz;
 
-        // Rotate
-        p.mesh.rotation.x += p.rotationSpeed.x;
-        p.mesh.rotation.y += p.rotationSpeed.y;
-        p.mesh.rotation.z += p.rotationSpeed.z;
-
-        // Dampen rotation when particles are at rest
-        const velocityMagnitude = Math.sqrt(p.vx * p.vx + p.vy * p.vy + p.vz * p.vz);
-        if (velocityMagnitude < 0.01) {
-            p.rotationSpeed.x *= 0.9;
-            p.rotationSpeed.y *= 0.9;
-            p.rotationSpeed.z *= 0.9;
-        } else {
-            p.rotationSpeed.x *= 0.98;
-            p.rotationSpeed.y *= 0.98;
-            p.rotationSpeed.z *= 0.98;
+        const distXZ = Math.sqrt(p.mesh.position.x ** 2 + p.mesh.position.z ** 2);
+        let limit = WOK_RADIUS - 0.3;
+        if (p.mesh.position.y < 0) {
+            limit = Math.sqrt(Math.max(0, WOK_RADIUS**2 - p.mesh.position.y**2)) - 0.3;
         }
 
-        // Keep in wok (spherical boundary following the curved surface)
-        const distXZ = Math.sqrt(
-            p.mesh.position.x * p.mesh.position.x +
-            p.mesh.position.z * p.mesh.position.z
-        );
-
-        // Use a slightly smaller radius to account for wok wall thickness
-        const interiorRadius = wokRadius - 0.3;
-        const bowlBottom = -wokRadius * Math.sin(wokDepth * Math.PI);
-
-        // Collision detection - check radial, spherical surface, and floor
-        let collided = false;
-
-        // First check: radial boundary at rim level
-        if (distXZ > interiorRadius) {
+        if (distXZ > limit) {
             const angle = Math.atan2(p.mesh.position.z, p.mesh.position.x);
-            p.mesh.position.x = Math.cos(angle) * interiorRadius;
-            p.mesh.position.z = Math.sin(angle) * interiorRadius;
-            // Bounce inward toward center
-            p.vx *= -0.5;
-            p.vz *= -0.5;
-            collided = true;
+            p.mesh.position.x = Math.cos(angle) * limit;
+            p.mesh.position.z = Math.sin(angle) * limit;
+            p.vx *= -0.3; p.vz *= -0.3;
         }
 
-        // Second check: curved bowl surface (only for particles below rim level)
-        if (!collided && p.mesh.position.y < -0.05) {
-            const bowlSurfaceY = -Math.sqrt(Math.max(0, interiorRadius * interiorRadius - distXZ * distXZ));
-
-            // If particle has penetrated through the curved side
-            if (p.mesh.position.y < bowlSurfaceY && bowlSurfaceY > bowlBottom + 0.1) {
-                p.mesh.position.y = bowlSurfaceY;
-                p.vy *= -0.3;
-                collided = true;
+        if (p.mesh.position.y < bowlBottom + 0.05) {
+            p.mesh.position.y = bowlBottom + 0.05;
+            if (isFinalToss && p.tx !== null) {
+                p.vx = p.vz = p.vy = 0; 
+                p.mesh.position.x = p.tx; p.mesh.position.z = p.tz;
+                p.rv.multiplyScalar(0.5);
+            } else {
+                p.vy *= -0.2; p.vx *= 0.8; p.vz *= 0.8;
             }
         }
 
-        // Third check: flat floor - only if no other collision
-        if (!collided && p.mesh.position.y < bowlBottom + 0.05) {
-            p.mesh.position.y = bowlBottom + 0.05;
-            p.vy *= -0.4;
+        if (!isFinalToss || p.mesh.position.y <= bowlBottom + 0.1) {
+            p.vx *= AIR_RESISTANCE; p.vy *= AIR_RESISTANCE; p.vz *= AIR_RESISTANCE;
         }
 
-        // Apply dampening
-        p.vx *= dampening;
-        p.vy *= dampening;
-        p.vz *= dampening;
+        p.mesh.rotation.x += p.rv.x; p.mesh.rotation.y += p.rv.y;
+        if (Math.abs(p.vx) + Math.abs(p.vy) < 0.01) p.rv.multiplyScalar(0.9);
     });
 }
 
-// Generate number shape from text
-function animateParticlesToNumber(number) {
+function getNumberPoints(number) {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
-    const size = 300;
-    canvas.width = size;
-    canvas.height = size;
-
-    ctx.fillStyle = '#000';
-    ctx.font = 'bold 220px Arial';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(number.toString(), size / 2, size / 2);
-
-    const imageData = ctx.getImageData(0, 0, size, size);
-    const data = imageData.data;
-
-    const pixelPositions = [];
-    for (let y = 0; y < size; y += 3) {
-        for (let x = 0; x < size; x += 3) {
-            const alpha = data[(y * size + x) * 4 + 3];
-            if (alpha > 128) {
-                // Convert to 3D coordinates (flat on wok surface at bottom of bowl)
-                const bowlBottom = -wokRadius * Math.sin(wokDepth * Math.PI);
-
-                pixelPositions.push({
-                    x: (x - size / 2) / 50,
-                    y: bowlBottom + 0.3,
-                    z: (y - size / 2) / 50,
-                });
+    canvas.width = canvas.height = 300;
+    ctx.fillStyle = 'black';
+    ctx.font = '220px Arial'; 
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(number.toString(), 150, 150);
+    const data = ctx.getImageData(0, 0, 300, 300).data;
+    const pts = [];
+    for (let y = 0; y < 300; y++) { 
+        for (let x = 0; x < 300; x++) {
+            if (data[(y * 300 + x) * 4 + 3] > 128) {
+                pts.push({ x: (x - 150) / 60, z: (y - 150) / 60 });
             }
         }
     }
-
-    // Shuffle for organic look
-    for (let i = pixelPositions.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [pixelPositions[i], pixelPositions[j]] = [pixelPositions[j], pixelPositions[i]];
+    const result = [];
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        const index = Math.floor((i / PARTICLE_COUNT) * pts.length);
+        result.push(pts[index] || { x: (Math.random()-0.5)*2, z: (Math.random()-0.5)*2 });
     }
-
-    particles.forEach((p, index) => {
-        if (index < pixelPositions.length) {
-            p.targetX = pixelPositions[index].x;
-            p.targetY = pixelPositions[index].y;
-            p.targetZ = pixelPositions[index].z;
-        } else {
-            p.targetX = null;
-            p.targetY = null;
-            p.targetZ = null;
-        }
-    });
-
-    isFormingNumber = true;
+    return result.sort(() => Math.random() - 0.5);
 }
 
-// Perform a single toss
+// --- GESTURE-BASED TOSS ---
 function performToss() {
     tossCount++;
+    const finalMode = (tossCount >= targetTosses);
 
-    // Animate the wok toss - tilt forward and lift slightly
-    wokTiltTarget = -0.3;
-    wokYTarget = 0.4;
+    // 1. WIND-UP (Slow dip, tilt away)
+    wokAnim.lerpSpeed = 0.1;
+    wokAnim.yTarget = -0.6;
+    wokAnim.tiltTarget = -0.25; // Tilt away from camera
 
     setTimeout(() => {
-        wokTiltTarget = 0.2; // Tilt back
+        // 2. THE SNAP (Explosive lift, flick towards camera)
+        wokAnim.lerpSpeed = 0.45; // Very fast
+        wokAnim.yTarget = 1.3;
+        wokAnim.tiltTarget = 0.65; // Flick interior towards viewport
+
+        // 3. LAUNCH: The moment of highest momentum
+        launchParticles(finalMode);
+
     }, 150);
 
     setTimeout(() => {
-        wokTiltTarget = 0;
-        wokYTarget = 0;
-    }, 400);
-
-    particles.forEach(p => {
-        p.targetX = null;
-        p.targetY = null;
-        p.targetZ = null;
-
-        const angle = Math.atan2(p.mesh.position.z, p.mesh.position.x);
-        const spreadPower = 0.03 + Math.random() * 0.04;
-
-        p.vx = Math.cos(angle) * spreadPower + (Math.random() - 0.5) * 0.02;
-        p.vz = Math.sin(angle) * spreadPower + (Math.random() - 0.5) * 0.02;
-        p.vy = 0.25 + Math.random() * 0.15;
-
-        p.rotationSpeed.set(
-            (Math.random() - 0.5) * 0.2,
-            (Math.random() - 0.5) * 0.2,
-            (Math.random() - 0.5) * 0.2
-        );
-    });
-
-    if (tossCount === generateOnToss) {
-        const minVal = parseInt(minInput.value) || 10;
-        const maxVal = parseInt(maxInput.value) || 99;
-        const min = Math.min(minVal, maxVal);
-        const max = Math.max(minVal, maxVal);
-        const randomNumber = Math.floor(Math.random() * (max - min + 1)) + min;
-
-        setTimeout(() => {
-            animateParticlesToNumber(randomNumber);
-        }, 400);
-
-        setTimeout(() => {
-            isTossing = false;
-            isFormingNumber = false;
-        }, 4500);
-    } else {
-        const delay = 800 + Math.random() * 600;
-        setTimeout(() => performToss(), delay);
-    }
+        // 4. RECOVERY (Slow settle back to home)
+        wokAnim.lerpSpeed = 0.07;
+        wokAnim.yTarget = 0;
+        wokAnim.tiltTarget = 0;
+        
+        if (finalMode) {
+            setTimeout(() => isTossing = false, 4000);
+        } else {
+            setTimeout(performToss, 800 + Math.random() * 500);
+        }
+    }, 450);
 }
 
-// Handle click to start toss sequence
+function launchParticles(finalMode) {
+    let points = [];
+    if (finalMode) {
+        isFinalToss = true;
+        const min = parseInt(minInput.value) || 1;
+        const max = parseInt(maxInput.value) || 99;
+        points = getNumberPoints(Math.floor(Math.random() * (max - min + 1)) + min);
+    }
+
+    particles.forEach((p, i) => {
+        const vUp = 0.48 + Math.random() * 0.12;
+        p.vy = vUp;
+        // Increase rotation for a more chaotic "toss" feel
+        p.rv.set((Math.random()-0.5)*0.5, (Math.random()-0.5)*0.5, (Math.random()-0.5)*0.5);
+
+        if (finalMode) {
+            const pt = points[i];
+            p.tx = pt.x; p.tz = pt.z;
+            const a = 0.5 * GRAVITY, b = vUp, c = p.mesh.position.y - (bowlBottom + 0.1);
+            const flightTime = (-b - Math.sqrt(b * b - 4 * a * c)) / (2 * a);
+            p.vx = (p.tx - p.mesh.position.x) / flightTime;
+            p.vz = (p.tz - p.mesh.position.z) / flightTime;
+        } else {
+            p.tx = null;
+            const ang = Math.random() * Math.PI * 2;
+            const pwr = 0.07 + Math.random() * 0.07;
+            p.vx = Math.cos(ang) * pwr;
+            p.vz = Math.sin(ang) * pwr;
+        }
+    });
+}
+
 function handleClick() {
-    if (isTossing || isFormingNumber) return;
-
+    if (isTossing) return;
     isTossing = true;
+    isFinalToss = false;
     tossCount = 0;
-    generateOnToss = Math.random() < 0.5 ? 3 : 4;
-
+    targetTosses = Math.floor(Math.random() * 2) + 3;
     performToss();
 }
 
 renderer.domElement.addEventListener('click', handleClick);
 
-// Handle window resize
+const loader = new GLTFLoader();
+loader.load('Orange.glb', (gltf) => {
+    let geo, mat;
+    gltf.scene.traverse(n => { if (n.isMesh && !geo) { geo = n.geometry.clone(); mat = n.material.clone(); }});
+    geo.center();
+    const size = new THREE.Box3().setFromObject(new THREE.Mesh(geo)).getSize(new THREE.Vector3());
+    geo.scale(0.18/Math.max(size.x, size.y), 0.18/Math.max(size.x, size.y), 0.18/Math.max(size.x, size.y));
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        const m = new THREE.Mesh(geo, mat);
+        m.castShadow = m.receiveShadow = true;
+        const ang = Math.random() * Math.PI * 2, dist = Math.random() * baseRadius * 0.85;
+        m.position.set(Math.cos(ang) * dist, bowlBottom + 0.1, Math.sin(ang) * dist);
+        m.rotation.set(Math.random()*7, Math.random()*7, Math.random()*7);
+        scene.add(m);
+        particles.push({ mesh: m, vx: 0, vy: 0, vz: 0, rv: new THREE.Vector3(), tx: null, tz: null });
+    }
+    const animate = () => { requestAnimationFrame(animate); updatePhysics(); renderer.render(scene, camera); };
+    animate();
+});
+
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
-
-// Animation loop
-function animate() {
-    requestAnimationFrame(animate);
-    updateParticles();
-    renderer.render(scene, camera);
-}
-
-let foodMesh = null; // Store the actual Mesh, not the whole Scene
-
-// 1. Global variables to store the orange data
-let orangeGeometry = null;
-let orangeMaterial = null;
-
-// 2. Define createParticles first
-function createParticles() {
-    // Safety: don't do anything if the geometry hasn't been extracted yet
-    if (!orangeGeometry) return;
-
-    // Clear existing particles from scene if any
-    particles.forEach(p => scene.remove(p.mesh));
-    particles.length = 0;
-    isFormingNumber = false;
-
-    const bowlBottom = -wokRadius * Math.sin(wokDepth * Math.PI);
-
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-        // Create a fresh mesh using the cleaned-up geometry and material
-        const mesh = new THREE.Mesh(orangeGeometry, orangeMaterial);
-
-        // Random position within wok
-        const angle = Math.random() * Math.PI * 2;
-        const distance = Math.random() * 3.8; // Distributed within the wok radius
-
-        mesh.position.x = Math.cos(angle) * distance;
-        mesh.position.z = Math.sin(angle) * distance;
-        mesh.position.y = bowlBottom + 0.3; // Sit slightly above the bottom
-        
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-
-        scene.add(mesh);
-
-        particles.push({
-            mesh: mesh,
-            vx: 0,
-            vy: 0,
-            vz: 0,
-            rotationSpeed: new THREE.Vector3(
-                (Math.random() - 0.5) * 0.1,
-                (Math.random() - 0.5) * 0.1,
-                (Math.random() - 0.5) * 0.1
-            ),
-            targetX: null,
-            targetY: null,
-            targetZ: null,
-        });
-    }
-}
-
-// 3. Define the Loader
-const loader = new GLTFLoader();
-
-loader.load('Orange.glb', (gltf) => {
-    console.log("GLB Loaded, extracting geometry...");
-
-    gltf.scene.traverse((child) => {
-        if (child.isMesh) {
-            // OPTIONAL: Skip meshes that are likely backgrounds/rooms
-            // If the mesh is huge compared to an orange, ignore it
-            child.geometry.computeBoundingBox();
-            const sizeTest = new THREE.Vector3();
-            child.geometry.boundingBox.getSize(sizeTest);
-            if (sizeTest.x > 50) return; // Skip if it's 50+ units wide
-
-            // Take the geometry and material from the first valid mesh found
-            if (!orangeGeometry) {
-                orangeGeometry = child.geometry.clone();
-                orangeMaterial = child.material.clone();
-                console.log("Extracted Mesh Name:", child.name);
-            }
-        }
-    });
-
-    if (orangeGeometry) {
-        // --- NORMALIZE GEOMETRY ---
-        // This fixes the "Giant Background" and "Offset" issues permanently
-        orangeGeometry.computeBoundingBox();
-        orangeGeometry.center(); // Move pivot point to center of orange
-        
-        const size = new THREE.Vector3();
-        orangeGeometry.boundingBox.getSize(size);
-        const maxDim = Math.max(size.x, size.y, size.z);
-        
-        // Scale the geometry itself to about 0.3 units
-        const targetSize = 0.3;
-        const scaleFactor = targetSize / maxDim;
-        orangeGeometry.scale(scaleFactor, scaleFactor, scaleFactor);
-
-        // --- START THE SCENE ---
-        createParticles();
-        animate(); // Start the loop only after model is ready
-    } else {
-        console.error("No valid mesh found in GLB!");
-    }
-}, 
-(xhr) => { console.log((xhr.loaded / xhr.total * 100) + '% loaded'); },
-(error) => { console.error("An error happened while loading GLB:", error); });
