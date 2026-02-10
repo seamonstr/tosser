@@ -1,292 +1,337 @@
-// Select the canvas and set up the context
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
+import * as THREE from 'three';
+
+// Three.js scene setup
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf4f4f9);
+
+// Camera - positioned at an angle to see the wok
+const camera = new THREE.PerspectiveCamera(
+    50,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    1000
+);
+camera.position.set(0, 10, 10);
+camera.lookAt(0, 0, 0);
+
+// Renderer
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+// Lighting
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+scene.add(ambientLight);
+
+const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+directionalLight.position.set(5, 10, 5);
+directionalLight.castShadow = true;
+directionalLight.shadow.mapSize.width = 2048;
+directionalLight.shadow.mapSize.height = 2048;
+scene.add(directionalLight);
+
+// Add a fill light from below to illuminate the wok interior
+const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+fillLight.position.set(0, -5, 2);
+scene.add(fillLight);
 
 // Get input elements
 const minInput = document.getElementById('minNumber');
 const maxInput = document.getElementById('maxNumber');
 
-// Wok properties - viewed from above as a circle
-const wok = {
-    x: canvas.width / 2,
-    y: canvas.height * 0.65,
-    radius: 180,
-    rimColor: '#444',
-    innerColor: '#333',
-    scale: 1,
-    targetScale: 1,
-};
+// Create the wok (bowl shape) - oriented correctly from the start
+const wokGroup = new THREE.Group();
 
-// Particle properties
+// Create a shallow bowl by using the top portion of a sphere
+// phiStart = PI/2 - angle makes it start from horizontal
+// phiLength determines depth
+const wokRadius = 4.5;
+const wokDepth = 0.15; // How much of the sphere to use (0.25 * PI radians)
+
+const wokGeometry = new THREE.SphereGeometry(
+    wokRadius,
+    32, 32,
+    0, Math.PI * 2,  // Full circle horizontally
+    Math.PI / 2,  // Start from horizontal (equator)
+    wokDepth * Math.PI  // Go downward to create bowl
+);
+
+const wokMaterial = new THREE.MeshStandardMaterial({
+    color: 0x555555,
+    metalness: 0.6,
+    roughness: 0.5,
+    side: THREE.DoubleSide,
+});
+const wok = new THREE.Mesh(wokGeometry, wokMaterial);
+wok.receiveShadow = true;
+wokGroup.add(wok);
+
+// Add a circular base to close the bottom of the wok
+const baseRadius = wokRadius * Math.cos(wokDepth * Math.PI);
+const baseY = -wokRadius * Math.sin(wokDepth * Math.PI);
+const baseGeometry = new THREE.CircleGeometry(baseRadius, 32);
+const baseMaterial = new THREE.MeshStandardMaterial({
+    color: 0x444444,
+    metalness: 0.7,
+    roughness: 0.4,
+    side: THREE.DoubleSide,
+});
+const base = new THREE.Mesh(baseGeometry, baseMaterial);
+base.rotation.x = -Math.PI / 2; // Face upward
+base.position.y = baseY;
+base.receiveShadow = true;
+wokGroup.add(base);
+
+// The rim is at y = 0 (the horizontal plane)
+const rimGeometry = new THREE.TorusGeometry(wokRadius, 0.15, 16, 50);
+const rimMaterial = new THREE.MeshStandardMaterial({
+    color: 0x666666,
+    metalness: 0.6,
+    roughness: 0.6,
+});
+const rim = new THREE.Mesh(rimGeometry, rimMaterial);
+rim.rotation.x = Math.PI / 2;
+rim.position.y = 0;
+wokGroup.add(rim);
+
+// The bottom of the bowl is at approximately y = -wokRadius * sin(wokDepth * PI)
+const bowlBottom = -wokRadius * Math.sin(wokDepth * Math.PI);
+
+wokGroup.position.y = 0;
+scene.add(wokGroup);
+
+// Particle system
 const particles = [];
 const particleTypes = [
-    { name: 'ginger', color: '#f2d7d5', shape: 'square' },
-    { name: 'garlic', color: '#f7e1c1', shape: 'circle' },
-    { name: 'rice', color: '#fce4d6', shape: 'rectangle' },
-    { name: 'beans', color: '#d4a574', shape: 'oval' },
+    { name: 'ginger', color: 0xf2d7d5 },
+    { name: 'garlic', color: 0xf7e1c1 },
+    { name: 'rice', color: 0xfce4d6 },
+    { name: 'beans', color: 0xd4a574 },
 ];
 
-const gravity = 0.3;
+// Physics constants
+const gravity = -0.015;
 const dampening = 0.98;
-const zGravity = 0.5; // Gravity pulling particles back down (away from camera)
-const airResistance = 0.02; // Drag force that slows fast-moving particles
-
-// Oblique projection settings (viewing angle)
-const viewAngle = 0.35; // How much the view is tilted (0 = top-down, 1 = side view)
-const perspectiveStrength = 0.003; // How much size changes with depth
 
 // Toss tracking
 let tossCount = 0;
 let generateOnToss = Math.random() < 0.5 ? 3 : 4;
 let isFormingNumber = false;
 let isTossing = false;
-let targetPositions = [];
 
-// Initialize particles scattered in the wok
+// Wok animation properties
+let wokTiltTarget = 0;
+let wokTiltCurrent = 0;
+let wokYTarget = 0;
+let wokYCurrent = 0;
+
+// Create particles
 function createParticles() {
+    particles.forEach(p => scene.remove(p.mesh));
     particles.length = 0;
     isFormingNumber = false;
+
+    const bowlBottom = -wokRadius * Math.sin(wokDepth * Math.PI);
+
     for (let i = 0; i < 400; i++) {
-        // Random position within wok circle
-        const angle = Math.random() * Math.PI * 2;
-        const distance = Math.random() * (wok.radius - 20);
         const type = particleTypes[Math.floor(Math.random() * particleTypes.length)];
 
+        // Random position within wok
+        const angle = Math.random() * Math.PI * 2;
+        const distance = Math.random() * 4.0;
+
+        const geometry = new THREE.BoxGeometry(0.08, 0.08, 0.08);
+        const material = new THREE.MeshStandardMaterial({ color: type.color });
+        const mesh = new THREE.Mesh(geometry, material);
+
+        mesh.position.x = Math.cos(angle) * distance;
+        mesh.position.z = Math.sin(angle) * distance;
+        mesh.position.y = bowlBottom + 0.2; // Rest on the bottom of the bowl
+        mesh.castShadow = true;
+
+        scene.add(mesh);
+
         particles.push({
-            x: wok.x + Math.cos(angle) * distance,
-            y: wok.y + Math.sin(angle) * distance,
-            z: 0, // Depth: 0 = at wok level, positive = towards camera
+            mesh: mesh,
             vx: 0,
             vy: 0,
-            vz: 0, // Velocity in z-direction
-            rotation: Math.random() * Math.PI * 2,
-            rotationSpeed: (Math.random() - 0.5) * 0.2,
-            type: type,
+            vz: 0,
+            rotationSpeed: new THREE.Vector3(
+                (Math.random() - 0.5) * 0.1,
+                (Math.random() - 0.5) * 0.1,
+                (Math.random() - 0.5) * 0.1
+            ),
             targetX: null,
             targetY: null,
+            targetZ: null,
         });
     }
 }
 
 createParticles();
 
-// Project 3D coordinates to 2D screen coordinates with oblique perspective
-function project3D(x, y, z) {
-    // Apply oblique projection
-    // z affects both vertical position (isometric) and scale (perspective)
-    const screenX = x;
-    const screenY = y - z * viewAngle; // Higher z = higher on screen
-    const scale = 1 + z * perspectiveStrength; // Closer = larger
-
-    return { x: screenX, y: screenY, scale: scale };
-}
-
-// Draw the wok from above
-function drawWok() {
-    // Animate wok scale smoothly
-    wok.scale += (wok.targetScale - wok.scale) * 0.1;
-
-    ctx.save();
-
-    // Draw wok as an ellipse to show oblique angle
-    const wokProjection = project3D(wok.x, wok.y, 0);
-
-    ctx.translate(wokProjection.x, wokProjection.y);
-    ctx.scale(wok.scale, wok.scale);
-
-    // Outer rim
-    ctx.beginPath();
-    ctx.ellipse(0, 0, wok.radius, wok.radius * 0.8, 0, 0, Math.PI * 2);
-    ctx.fillStyle = '#555';
-    ctx.fill();
-
-    // Inner cooking surface
-    ctx.beginPath();
-    ctx.ellipse(0, 0, wok.radius - 20, (wok.radius - 20) * 0.75, 0, 0, Math.PI * 2);
-
-    // Gradient from center to edge
-    const gradient = ctx.createRadialGradient(0, -30, 20, 0, 0, wok.radius - 20);
-    gradient.addColorStop(0, '#3a3a3a');
-    gradient.addColorStop(1, '#1a1a1a');
-    ctx.fillStyle = gradient;
-    ctx.fill();
-
-    ctx.restore();
-}
-
-// Draw a single particle based on its type
-function drawParticle(p) {
-    // Project 3D position to 2D screen
-    const projected = project3D(p.x, p.y, p.z);
-
-    // Calculate size based on z-depth and projection scale
-    const baseSize = 3;
-    const depthScale = 1 + p.z * 0.015; // Existing depth scaling
-    const size = baseSize * depthScale * projected.scale;
-
-    // Adjust opacity based on depth
-    const opacity = Math.max(0.7, 1 - p.z * 0.005);
-
-    ctx.save();
-    ctx.translate(projected.x, projected.y);
-    ctx.rotate(p.rotation);
-    ctx.globalAlpha = opacity;
-    ctx.fillStyle = p.type.color;
-
-    switch(p.type.shape) {
-        case 'circle':
-            ctx.beginPath();
-            ctx.arc(0, 0, size, 0, Math.PI * 2);
-            ctx.fill();
-            break;
-        case 'square':
-            ctx.fillRect(-size, -size, size * 2, size * 2);
-            break;
-        case 'rectangle':
-            ctx.fillRect(-size * 1.3, -size * 0.7, size * 2.6, size * 1.4);
-            break;
-        case 'oval':
-            ctx.beginPath();
-            ctx.ellipse(0, 0, size * 1.3, size * 0.8, 0, 0, Math.PI * 2);
-            ctx.fill();
-            break;
-    }
-
-    ctx.restore();
-}
-
-// Draw all particles
-function drawParticles() {
-    particles.forEach(p => drawParticle(p));
-}
-
-// Update particle positions
+// Update particle physics
 function updateParticles() {
+    // Animate wok tilt and position
+    wokTiltCurrent += (wokTiltTarget - wokTiltCurrent) * 0.15;
+    wokYCurrent += (wokYTarget - wokYCurrent) * 0.15;
+    wokGroup.rotation.x = wokTiltCurrent;
+    wokGroup.position.y = wokYCurrent;
+
     particles.forEach(p => {
-        // If forming a number, apply gentle force towards target position
-        if (isFormingNumber && p.targetX !== null && p.targetY !== null) {
-            const dx = p.targetX - p.x;
-            const dy = p.targetY - p.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
+        // If forming a number, move towards target
+        if (isFormingNumber && p.targetX !== null) {
+            const dx = p.targetX - p.mesh.position.x;
+            const dy = p.targetY - p.mesh.position.y;
+            const dz = p.targetZ - p.mesh.position.z;
+            const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
-            if (distance > 5) {
-                // Dampen existing velocities more aggressively when targeting
-                p.vx *= 0.85;
-                p.vy *= 0.85;
+            if (distance > 0.05) {
+                // Apply controlled attraction force
+                const strength = 0.008;
+                p.vx += dx * strength;
+                p.vy += dy * strength;
+                p.vz += dz * strength;
 
-                // Apply stronger force that increases as particle gets closer
-                const strength = distance > 50 ? 0.2 : 0.35;
-                p.vx += dx * strength * 0.01;
-                p.vy += dy * strength * 0.01;
-            } else if (distance > 1) {
-                // Final approach - much stronger dampening and attraction
-                p.vx *= 0.7;
-                p.vy *= 0.7;
-                p.vx += dx * 0.1;
-                p.vy += dy * 0.1;
+                // Still apply gravity for natural fall
+                p.vy += gravity * 0.5;
+
+                // Apply stronger dampening as we get closer to target
+                const damping = distance > 0.5 ? 0.92 : 0.8;
+                p.vx *= damping;
+                p.vy *= damping;
+                p.vz *= damping;
             } else {
-                // Lock in place when close enough
-                p.x = p.targetX;
-                p.y = p.targetY;
-                p.vx = 0;
-                p.vy = 0;
+                p.mesh.position.set(p.targetX, p.targetY, p.targetZ);
+                p.vx = p.vy = p.vz = 0;
+            }
+        } else {
+            // Apply gravity
+            p.vy += gravity;
+        }
+
+        // Update position
+        p.mesh.position.x += p.vx;
+        p.mesh.position.y += p.vy;
+        p.mesh.position.z += p.vz;
+
+        // Rotate
+        p.mesh.rotation.x += p.rotationSpeed.x;
+        p.mesh.rotation.y += p.rotationSpeed.y;
+        p.mesh.rotation.z += p.rotationSpeed.z;
+        
+        // Dampen rotation when particles are at rest
+        const velocityMagnitude = Math.sqrt(p.vx * p.vx + p.vy * p.vy + p.vz * p.vz);
+        if (velocityMagnitude < 0.01) {
+            p.rotationSpeed.x *= 0.9;
+            p.rotationSpeed.y *= 0.9;
+            p.rotationSpeed.z *= 0.9;
+        } else {
+            p.rotationSpeed.x *= 0.98;
+            p.rotationSpeed.y *= 0.98;
+            p.rotationSpeed.z *= 0.98;
+        }
+
+        // Keep in wok (spherical boundary following the curved surface)
+        const distXZ = Math.sqrt(
+            p.mesh.position.x * p.mesh.position.x +
+            p.mesh.position.z * p.mesh.position.z
+        );
+
+        // Use a slightly smaller radius to account for wok wall thickness
+        const interiorRadius = wokRadius - 0.3;
+        const bowlBottom = -wokRadius * Math.sin(wokDepth * Math.PI);
+
+        // Collision detection - check radial, spherical surface, and floor
+        let collided = false;
+
+        // First check: radial boundary at rim level
+        if (distXZ > interiorRadius) {
+            const angle = Math.atan2(p.mesh.position.z, p.mesh.position.x);
+            p.mesh.position.x = Math.cos(angle) * interiorRadius;
+            p.mesh.position.z = Math.sin(angle) * interiorRadius;
+            // Bounce inward toward center
+            p.vx *= -0.5;
+            p.vz *= -0.5;
+            collided = true;
+        }
+
+        // Second check: curved bowl surface (only for particles below rim level)
+        if (!collided && p.mesh.position.y < -0.05) {
+            const bowlSurfaceY = -Math.sqrt(Math.max(0, interiorRadius * interiorRadius - distXZ * distXZ));
+
+            // If particle has penetrated through the curved side
+            if (p.mesh.position.y < bowlSurfaceY && bowlSurfaceY > bowlBottom + 0.1) {
+                p.mesh.position.y = bowlSurfaceY;
+                p.vy *= -0.3;
+                collided = true;
             }
         }
 
-        // Apply z-axis gravity and air resistance
-        p.vz -= zGravity;
-        p.vz *= (1 - airResistance);
-
-        // Update position
-        p.x += p.vx;
-        p.y += p.vy;
-        p.z += p.vz;
-        p.rotation += p.rotationSpeed;
-
-        // Keep z from going negative (below wok surface)
-        if (p.z < 0) {
-            p.z = 0;
-            p.vz *= -0.4; // Bounce with energy loss
+        // Third check: flat floor - only if no other collision
+        if (!collided && p.mesh.position.y < bowlBottom + 0.05) {
+            p.mesh.position.y = bowlBottom + 0.05;
+            p.vy *= -0.4;
         }
 
-        // Apply dampening (friction) - particles slow down naturally
+        // Apply dampening
         p.vx *= dampening;
         p.vy *= dampening;
         p.vz *= dampening;
-        p.rotationSpeed *= dampening;
-
-        // Keep particles within the wok (circular boundary)
-        const dx = p.x - wok.x;
-        const dy = p.y - wok.y;
-        const distanceFromCenter = Math.sqrt(dx * dx + dy * dy);
-
-        if (distanceFromCenter > wok.radius - 20) {
-            // Bounce back into the wok with energy loss
-            const angle = Math.atan2(dy, dx);
-            p.x = wok.x + Math.cos(angle) * (wok.radius - 20);
-            p.y = wok.y + Math.sin(angle) * (wok.radius - 20);
-
-            // Reflect velocity with damping
-            const normalX = Math.cos(angle);
-            const normalY = Math.sin(angle);
-            const dotProduct = p.vx * normalX + p.vy * normalY;
-            p.vx = p.vx - 2 * dotProduct * normalX;
-            p.vy = p.vy - 2 * dotProduct * normalY;
-            p.vx *= 0.6;
-            p.vy *= 0.6;
-        }
     });
 }
 
-// Generate pixel map for a number and assign target positions to particles
+// Generate number shape from text
 function animateParticlesToNumber(number) {
-    const offscreenCanvas = document.createElement('canvas');
-    const offscreenCtx = offscreenCanvas.getContext('2d');
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
     const size = 300;
-    offscreenCanvas.width = size;
-    offscreenCanvas.height = size;
+    canvas.width = size;
+    canvas.height = size;
 
-    // Draw the number on the offscreen canvas
-    offscreenCtx.fillStyle = '#000';
-    offscreenCtx.font = 'bold 220px Arial';
-    offscreenCtx.textAlign = 'center';
-    offscreenCtx.textBaseline = 'middle';
-    offscreenCtx.fillText(number.toString(), size / 2, size / 2);
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 220px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(number.toString(), size / 2, size / 2);
 
-    const imageData = offscreenCtx.getImageData(0, 0, size, size);
+    const imageData = ctx.getImageData(0, 0, size, size);
     const data = imageData.data;
 
-    // Collect all pixel positions that are part of the number
     const pixelPositions = [];
     for (let y = 0; y < size; y += 3) {
         for (let x = 0; x < size; x += 3) {
             const alpha = data[(y * size + x) * 4 + 3];
             if (alpha > 128) {
+                // Convert to 3D coordinates (flat on wok surface at bottom of bowl)
+                const bowlBottom = -wokRadius * Math.sin(wokDepth * Math.PI);
+
                 pixelPositions.push({
-                    x: wok.x - size / 2 + x,
-                    y: wok.y - size / 2 + y,
+                    x: (x - size / 2) / 50,
+                    y: bowlBottom + 0.3,
+                    z: (y - size / 2) / 50,
                 });
             }
         }
     }
 
-    // Shuffle pixel positions for more organic animation
+    // Shuffle for organic look
     for (let i = pixelPositions.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [pixelPositions[i], pixelPositions[j]] = [pixelPositions[j], pixelPositions[i]];
     }
 
-    // Assign target positions to particles
     particles.forEach((p, index) => {
         if (index < pixelPositions.length) {
             p.targetX = pixelPositions[index].x;
             p.targetY = pixelPositions[index].y;
+            p.targetZ = pixelPositions[index].z;
         } else {
-            // Extra particles stay scattered
             p.targetX = null;
             p.targetY = null;
+            p.targetZ = null;
         }
     });
 
@@ -297,32 +342,38 @@ function animateParticlesToNumber(number) {
 function performToss() {
     tossCount++;
 
-    // Animate the wok toss
-    wok.targetScale = 1.15;
-    setTimeout(() => { wok.targetScale = 1; }, 300);
+    // Animate the wok toss - tilt forward and lift slightly
+    wokTiltTarget = -0.3;
+    wokYTarget = 0.4;
 
-    // Perform toss animation - particles fly UP towards camera
+    setTimeout(() => {
+        wokTiltTarget = 0.2; // Tilt back
+    }, 150);
+
+    setTimeout(() => {
+        wokTiltTarget = 0;
+        wokYTarget = 0;
+    }, 400);
+
     particles.forEach(p => {
-        // Clear any target positions
         p.targetX = null;
         p.targetY = null;
+        p.targetZ = null;
 
-        // Calculate direction from center for slight spread
-        const angle = Math.atan2(p.y - wok.y, p.x - wok.x);
+        const angle = Math.atan2(p.mesh.position.z, p.mesh.position.x);
+        const spreadPower = 0.03 + Math.random() * 0.04;
 
-        // Small horizontal/vertical spread
-        const spreadPower = 2 + Math.random() * 3;
-        p.vx = Math.cos(angle) * spreadPower + (Math.random() - 0.5) * 2;
-        p.vy = Math.sin(angle) * spreadPower + (Math.random() - 0.5) * 2;
+        p.vx = Math.cos(angle) * spreadPower + (Math.random() - 0.5) * 0.02;
+        p.vz = Math.sin(angle) * spreadPower + (Math.random() - 0.5) * 0.02;
+        p.vy = 0.25 + Math.random() * 0.15;
 
-        // MAIN TOSS: Strong initial velocity UP (towards camera = positive z)
-        // Higher initial velocity for harder acceleration at start
-        p.vz = 18 + Math.random() * 10;
-
-        p.rotationSpeed = (Math.random() - 0.5) * 0.5;
+        p.rotationSpeed.set(
+            (Math.random() - 0.5) * 0.2,
+            (Math.random() - 0.5) * 0.2,
+            (Math.random() - 0.5) * 0.2
+        );
     });
 
-    // Check if it's time to generate a number
     if (tossCount === generateOnToss) {
         const minVal = parseInt(minInput.value) || 10;
         const maxVal = parseInt(maxInput.value) || 99;
@@ -330,47 +381,45 @@ function performToss() {
         const max = Math.max(minVal, maxVal);
         const randomNumber = Math.floor(Math.random() * (max - min + 1)) + min;
 
-        // Assign number targets immediately so particles form the number as they fall
         setTimeout(() => {
             animateParticlesToNumber(randomNumber);
-        }, 400); // Small delay to let particles reach apex of trajectory
+        }, 400);
 
-        // Allow new round after number forms
         setTimeout(() => {
             isTossing = false;
             isFormingNumber = false;
         }, 4500);
     } else {
-        // Schedule next automatic toss with random delay
-        const delay = 800 + Math.random() * 600; // 800-1400ms
+        const delay = 800 + Math.random() * 600;
         setTimeout(() => performToss(), delay);
     }
 }
 
-// Handle initial click to start toss sequence
-function toss() {
-    // Don't allow new sequence while already tossing or forming number
+// Handle click to start toss sequence
+function handleClick() {
     if (isTossing || isFormingNumber) return;
 
-    // Reset for new sequence
     isTossing = true;
     tossCount = 0;
     generateOnToss = Math.random() < 0.5 ? 3 : 4;
 
-    // Start the automatic toss sequence
     performToss();
 }
 
-// Listen for clicks anywhere on the canvas
-canvas.addEventListener('click', toss);
+renderer.domElement.addEventListener('click', handleClick);
+
+// Handle window resize
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
 
 // Animation loop
 function animate() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    drawWok();
-    drawParticles();
-    updateParticles();
     requestAnimationFrame(animate);
+    updateParticles();
+    renderer.render(scene, camera);
 }
 
 animate();

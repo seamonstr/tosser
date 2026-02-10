@@ -1,12 +1,14 @@
 /* General styles */
 body {
     margin: 0;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
+    overflow: hidden;
     background-color: #f4f4f9;
     font-family: 'Arial Rounded MT Bold', 'Helvetica Rounded', Arial, sans-serif;
+}
+
+#canvas-container {
+    width: 100vw;
+    height: 100vh;
 }
 
 canvas {

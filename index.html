@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Toss Me a Number</title>
     <link rel="stylesheet" href="style.css">
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./three.js"
+        }
+      }
+    </script>
 </head>
 <body>
     <div class="overlay">
@@ -19,7 +26,7 @@
         </div>
         <div class="instructions">Click anywhere to toss!</div>
     </div>
-    <canvas id="canvas"></canvas>
-    <script src="script.js"></script>
+    <div id="canvas-container"></div>
+    <script type="module" src="script.js"></script>
 </body>
 </html>
