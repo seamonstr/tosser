@@ -33,6 +33,10 @@ const dampening = 0.98;
 const zGravity = 0.5; // Gravity pulling particles back down (away from camera)
 const airResistance = 0.02; // Drag force that slows fast-moving particles
 
+// Oblique projection settings (viewing angle)
+const viewAngle = 0.35; // How much the view is tilted (0 = top-down, 1 = side view)
+const perspectiveStrength = 0.003; // How much size changes with depth
+
 // Toss tracking
 let tossCount = 0;
 let generateOnToss = Math.random() < 0.5 ? 3 : 4;
@@ -68,32 +72,44 @@ function createParticles() {
 
 createParticles();
 
+// Project 3D coordinates to 2D screen coordinates with oblique perspective
+function project3D(x, y, z) {
+    // Apply oblique projection
+    // z affects both vertical position (isometric) and scale (perspective)
+    const screenX = x;
+    const screenY = y - z * viewAngle; // Higher z = higher on screen
+    const scale = 1 + z * perspectiveStrength; // Closer = larger
+
+    return { x: screenX, y: screenY, scale: scale };
+}
+
 // Draw the wok from above
 function drawWok() {
     // Animate wok scale smoothly
     wok.scale += (wok.targetScale - wok.scale) * 0.1;
 
     ctx.save();
-    ctx.translate(wok.x, wok.y);
+
+    // Draw wok as an ellipse to show oblique angle
+    const wokProjection = project3D(wok.x, wok.y, 0);
+
+    ctx.translate(wokProjection.x, wokProjection.y);
     ctx.scale(wok.scale, wok.scale);
-    ctx.translate(-wok.x, -wok.y);
 
     // Outer rim
     ctx.beginPath();
-    ctx.arc(wok.x, wok.y, wok.radius, 0, Math.PI * 2);
-    ctx.fillStyle = wok.rimColor;
+    ctx.ellipse(0, 0, wok.radius, wok.radius * 0.8, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#555';
     ctx.fill();
 
-    // Inner circle
+    // Inner cooking surface
     ctx.beginPath();
-    ctx.arc(wok.x, wok.y, wok.radius - 15, 0, Math.PI * 2);
-    ctx.fillStyle = wok.innerColor;
-    ctx.fill();
+    ctx.ellipse(0, 0, wok.radius - 20, (wok.radius - 20) * 0.75, 0, 0, Math.PI * 2);
 
-    // Add some depth/shading
-    const gradient = ctx.createRadialGradient(wok.x, wok.y, 0, wok.x, wok.y, wok.radius - 15);
-    gradient.addColorStop(0, 'rgba(80, 80, 80, 0.3)');
-    gradient.addColorStop(1, 'rgba(20, 20, 20, 0.5)');
+    // Gradient from center to edge
+    const gradient = ctx.createRadialGradient(0, -30, 20, 0, 0, wok.radius - 20);
+    gradient.addColorStop(0, '#3a3a3a');
+    gradient.addColorStop(1, '#1a1a1a');
     ctx.fillStyle = gradient;
     ctx.fill();
 
@@ -102,15 +118,19 @@ function drawWok() {
 
 // Draw a single particle based on its type
 function drawParticle(p) {
-    // Calculate scale based on z-depth (particles closer to camera are larger)
-    const scale = 1 + p.z * 0.015; // Each unit of z increases size by 1.5%
-    const size = 3 * scale;
+    // Project 3D position to 2D screen
+    const projected = project3D(p.x, p.y, p.z);
 
-    // Adjust opacity based on depth (optional: particles slightly fade when far)
+    // Calculate size based on z-depth and projection scale
+    const baseSize = 3;
+    const depthScale = 1 + p.z * 0.015; // Existing depth scaling
+    const size = baseSize * depthScale * projected.scale;
+
+    // Adjust opacity based on depth
     const opacity = Math.max(0.7, 1 - p.z * 0.005);
 
     ctx.save();
-    ctx.translate(p.x, p.y);
+    ctx.translate(projected.x, projected.y);
     ctx.rotate(p.rotation);
     ctx.globalAlpha = opacity;
     ctx.fillStyle = p.type.color;
@@ -151,11 +171,21 @@ function updateParticles() {
             const dy = p.targetY - p.y;
             const distance = Math.sqrt(dx * dx + dy * dy);
 
-            if (distance > 2) {
-                // Apply force towards target (accelerate, don't override velocity)
-                const strength = 0.3;
+            if (distance > 5) {
+                // Dampen existing velocities more aggressively when targeting
+                p.vx *= 0.85;
+                p.vy *= 0.85;
+
+                // Apply stronger force that increases as particle gets closer
+                const strength = distance > 50 ? 0.2 : 0.35;
                 p.vx += dx * strength * 0.01;
                 p.vy += dy * strength * 0.01;
+            } else if (distance > 1) {
+                // Final approach - much stronger dampening and attraction
+                p.vx *= 0.7;
+                p.vy *= 0.7;
+                p.vx += dx * 0.1;
+                p.vy += dy * 0.1;
             } else {
                 // Lock in place when close enough
                 p.x = p.targetX;
@@ -165,16 +195,9 @@ function updateParticles() {
             }
         }
 
-        // Apply z-axis gravity (falling back into wok)
-        if (!isFormingNumber || p.targetX === null) {
-            p.vz -= zGravity;
-            // Apply air resistance for natural easing (stronger effect on faster particles)
-            p.vz *= (1 - airResistance);
-        } else {
-            // Also settle z position when forming number
-            p.vz -= zGravity;
-            p.vz *= (1 - airResistance);
-        }
+        // Apply z-axis gravity and air resistance
+        p.vz -= zGravity;
+        p.vz *= (1 - airResistance);
 
         // Update position
         p.x += p.vx;
