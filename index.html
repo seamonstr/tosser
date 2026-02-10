@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Toss Me a Number</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="overlay">
+        <h1>Toss me a number</h1>
+        <div class="controls">
+            <label>
+                Min: <input type="number" id="minNumber" value="10" min="0" max="999">
+            </label>
+            <label>
+                Max: <input type="number" id="maxNumber" value="99" min="0" max="999">
+            </label>
+        </div>
+        <div class="instructions">Click anywhere to toss!</div>
+    </div>
+    <canvas id="canvas"></canvas>
+    <script src="script.js"></script>
+</body>
+</html>

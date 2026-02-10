@@ -1,0 +1,59 @@
+/* General styles */
+body {
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    background-color: #f4f4f9;
+    font-family: 'Arial Rounded MT Bold', 'Helvetica Rounded', Arial, sans-serif;
+}
+
+canvas {
+    display: block;
+}
+
+.overlay {
+    position: absolute;
+    top: 5%;
+    text-align: center;
+    color: #333;
+    z-index: 10;
+    pointer-events: none;
+}
+
+.overlay input {
+    pointer-events: auto;
+}
+
+.overlay h1 {
+    margin: 0 0 15px 0;
+    font-size: 2.5rem;
+}
+
+.controls {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    margin-bottom: 10px;
+}
+
+.controls label {
+    font-size: 1.1rem;
+    font-weight: bold;
+}
+
+.controls input {
+    width: 70px;
+    padding: 5px 10px;
+    font-size: 1rem;
+    border: 2px solid #555;
+    border-radius: 8px;
+    font-family: inherit;
+}
+
+.instructions {
+    font-size: 0.9rem;
+    color: #666;
+    font-style: italic;
+}
