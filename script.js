@@ -42,7 +42,6 @@ const wokGroup = new THREE.Group();
 const bowlBottom = -WOK_RADIUS * Math.sin(WOK_DEPTH * Math.PI);
 const baseRadius = WOK_RADIUS * Math.cos(WOK_DEPTH * Math.PI);
 
-// USER PREFERRED MATERIAL
 const wokMat = new THREE.MeshStandardMaterial({ 
     color: 0x888888,   
     metalness: 0.9,    
@@ -74,11 +73,13 @@ let isTossing = false;
 let isFinalToss = false;
 let tossCount = 0;
 let targetTosses = 3;
+let tossDir = 1; // 1 for Right, -1 for Left
 
-// Animation State
 let wokAnim = { 
-    tiltTarget: 0, 
-    yTarget: 0, 
+    tiltX: 0, 
+    rollZ: 0,
+    xPos: 0,
+    yPos: 0, 
     lerpSpeed: 0.15 
 };
 
@@ -87,9 +88,10 @@ const maxInput = document.getElementById('maxNumber');
 
 // --- PHYSICS ENGINE ---
 function updatePhysics() {
-    // Variable easing for the wok gesture
-    wokGroup.rotation.x += (wokAnim.tiltTarget - wokGroup.rotation.x) * wokAnim.lerpSpeed;
-    wokGroup.position.y += (wokAnim.yTarget - wokGroup.position.y) * wokAnim.lerpSpeed;
+    wokGroup.rotation.x += (wokAnim.tiltX - wokGroup.rotation.x) * wokAnim.lerpSpeed;
+    wokGroup.rotation.z += (wokAnim.rollZ - wokGroup.rotation.z) * wokAnim.lerpSpeed;
+    wokGroup.position.x += (wokAnim.xPos - wokGroup.position.x) * wokAnim.lerpSpeed;
+    wokGroup.position.y += (wokAnim.yPos - wokGroup.position.y) * wokAnim.lerpSpeed;
 
     particles.forEach(p => {
         p.vy += GRAVITY;
@@ -155,42 +157,50 @@ function getNumberPoints(number) {
     return result.sort(() => Math.random() - 0.5);
 }
 
-// --- GESTURE-BASED TOSS ---
+// --- ALTERNATING SIDEWAYS TOSS ---
 function performToss() {
     tossCount++;
     const finalMode = (tossCount >= targetTosses);
+    
+    // Capture current direction then flip it for the next one
+    const dir = tossDir;
+    tossDir *= -1; 
 
-    // 1. WIND-UP (Slow dip, tilt away)
-    wokAnim.lerpSpeed = 0.1;
-    wokAnim.yTarget = -0.6;
-    wokAnim.tiltTarget = -0.25; // Tilt away from camera
+    // 1. WIND-UP (Dip and roll away from toss direction)
+    wokAnim.lerpSpeed = 0.12;
+    wokAnim.yPos = -0.5;
+    wokAnim.xPos = -0.4 * dir;
+    wokAnim.rollZ = 0.25 * dir;
+    wokAnim.tiltX = -0.1;
 
     setTimeout(() => {
-        // 2. THE SNAP (Explosive lift, flick towards camera)
-        wokAnim.lerpSpeed = 0.45; // Very fast
-        wokAnim.yTarget = 1.3;
-        wokAnim.tiltTarget = 0.65; // Flick interior towards viewport
+        // 2. THE SIDEWAYS SNAP (Lateral shift and sharp roll)
+        wokAnim.lerpSpeed = 0.45;
+        wokAnim.yPos = 1.2;
+        wokAnim.xPos = 0.9 * dir;
+        wokAnim.rollZ = -0.7 * dir; // Sharp roll towards the side
+        wokAnim.tiltX = 0.2;
 
-        // 3. LAUNCH: The moment of highest momentum
-        launchParticles(finalMode);
-
+        launchParticles(finalMode, dir);
     }, 150);
 
     setTimeout(() => {
-        // 4. RECOVERY (Slow settle back to home)
-        wokAnim.lerpSpeed = 0.07;
-        wokAnim.yTarget = 0;
-        wokAnim.tiltTarget = 0;
+        // 3. RECOVERY
+        wokAnim.lerpSpeed = 0.12; // Slightly faster catch speed
+        wokAnim.yPos = 0;
+        wokAnim.xPos = 0;
+        wokAnim.rollZ = 0;
+        wokAnim.tiltX = 0;
         
         if (finalMode) {
             setTimeout(() => isTossing = false, 4000);
         } else {
-            setTimeout(performToss, 800 + Math.random() * 500);
+            setTimeout(performToss, 900 + Math.random() * 500);
         }
     }, 450);
 }
 
-function launchParticles(finalMode) {
+function launchParticles(finalMode, dir) {
     let points = [];
     if (finalMode) {
         isFinalToss = true;
@@ -200,9 +210,8 @@ function launchParticles(finalMode) {
     }
 
     particles.forEach((p, i) => {
-        const vUp = 0.48 + Math.random() * 0.12;
+        const vUp = 0.45 + Math.random() * 0.15;
         p.vy = vUp;
-        // Increase rotation for a more chaotic "toss" feel
         p.rv.set((Math.random()-0.5)*0.5, (Math.random()-0.5)*0.5, (Math.random()-0.5)*0.5);
 
         if (finalMode) {
@@ -214,10 +223,11 @@ function launchParticles(finalMode) {
             p.vz = (p.tz - p.mesh.position.z) / flightTime;
         } else {
             p.tx = null;
-            const ang = Math.random() * Math.PI * 2;
-            const pwr = 0.07 + Math.random() * 0.07;
-            p.vx = Math.cos(ang) * pwr;
-            p.vz = Math.sin(ang) * pwr;
+            // Bias horizontal velocity toward the toss direction
+            const sidePower = (0.07 + Math.random() * 0.07) * dir;
+            const depthPower = (Math.random() - 0.5) * 0.08;
+            p.vx = sidePower;
+            p.vz = depthPower;
         }
     });
 }
@@ -227,6 +237,7 @@ function handleClick() {
     isTossing = true;
     isFinalToss = false;
     tossCount = 0;
+    tossDir = 1; // Always start new sequence by tossing to the right
     targetTosses = Math.floor(Math.random() * 2) + 3;
     performToss();
 }
